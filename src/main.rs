@@ -1,19 +1,27 @@
-use std::{io::prelude::*, net::TcpStream};
+use std::{time::Duration, io::prelude::*, net::TcpStream, sync::mpsc::Sender};
 use std::net::TcpListener;
 use std::thread;
 use std::collections::HashMap;
+use std::sync::mpsc;
 
-const GROUP_SIZE: usize = 5;
+const GROUP_SIZE: usize = 15;
+const CLIENT_NUMBER: i32 = 750;
 const SIMULATION_CYCLES: i32 = 5;
 
 fn main() {
     let mut group_loop_it = GROUP_SIZE;
     let mut group_counter = 1;
     let mut stream_group: Vec<TcpStream> = Vec::new();
+    let mut stream_groups:Vec<(Vec<TcpStream>, i32)> = Vec::new();
+
+    let (tx_stop_signal, rx_stop_signal) = mpsc::channel();
+    let (tx_end_confirmation, rx_end_confirmation) = mpsc::channel();
 
     let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
-    let mut connection_count = 0;
+    let mut connection_count = 1;
 
+    println!("Server initialized, awaiting for all clients to connect...");
+    
     for stream in listener.incoming() {
         //Add the current connection of iteration to the group
         group_loop_it-=1;
@@ -21,19 +29,43 @@ fn main() {
 
         if group_loop_it == 0 {
             //Create the thread with a completed connections group
-            thread::spawn(move || handle_group_connection(stream_group, group_counter));
+            stream_groups.push((stream_group, group_counter));
             stream_group = Vec::new();
             group_loop_it = GROUP_SIZE;
             group_counter +=  1;
         }
 
-        //
+        if connection_count == CLIENT_NUMBER {
+            break;
+        }
         connection_count+=1;
-        println!("Number of connections: {}", connection_count);
     }
+
+    println!("All {} clients connected, starting simulation...", connection_count);
+    thread::sleep(Duration::from_secs(3));
+
+    println!("\nSimulation running...\n");
+    for group in stream_groups{
+        let tx1 = mpsc::Sender::clone(&tx_stop_signal);
+        let tx2 = mpsc::Sender::clone(&tx_end_confirmation);
+        thread::spawn(move || handle_group_connection(group.0, group.1,tx1,tx2));
+    }
+
+    for _ in 0..CLIENT_NUMBER{
+        while !rx_stop_signal.recv().is_ok(){};
+    }
+
+    drop(rx_end_confirmation);
+
+    for _ in 0..CLIENT_NUMBER{
+        while !rx_stop_signal.recv().is_ok(){};
+    }
+
+    println!("\nSimulation ended.")
+
 }
 
-fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32){
+fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32, tx_stop_signal: Sender<()>, tx_end_confirmation: Sender<()>){
     let mut buffer = [0 as u8; 10];
     let mut group_data = HashMap::with_capacity(GROUP_SIZE);
 
@@ -74,6 +106,14 @@ fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32){
         }
     }
 
+    //Wait for all threads before ending
+    for _ in &stream_group{
+        while !tx_stop_signal.send(()).is_ok(){};
+    }
+    while tx_end_confirmation.send(()).is_ok() {
+        thread::sleep(Duration::from_secs(5));
+    }
+
     //Send end simulation signal
     for mut stream in &stream_group{
         buffer = data_to_bytes(&(-1,(0,0,0)));
@@ -84,6 +124,10 @@ fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32){
     for mut stream in &stream_group{
         while !stream.read(&mut buffer).is_ok() {};
         println!("Average millis ellapsed: {}", bytes_to_time(&buffer))
+    }
+
+    for _ in &stream_group{
+        while !tx_stop_signal.send(()).is_ok(){};
     }
 
 }
