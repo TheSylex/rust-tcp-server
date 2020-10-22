@@ -5,8 +5,9 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 
 const GROUP_SIZE: usize = 15;
-const CLIENT_NUMBER: i32 = 750;
+const CLIENT_NUMBER: i32 = 7500;
 const SIMULATION_CYCLES: i32 = 5;
+const CONN_TIMEOUT: u64 = 15;
 
 fn main() {
     let mut group_loop_it = GROUP_SIZE;
@@ -57,15 +58,24 @@ fn main() {
 
     drop(rx_end_confirmation);
 
+    let mut avg_response_time = 0;
     for _ in 0..CLIENT_NUMBER{
-        while !rx_stop_signal.recv().is_ok(){};
+        loop{
+            match rx_stop_signal.recv() {
+                Ok(r) => {
+                    avg_response_time = (avg_response_time + r)/2;
+                    break;
+                },
+                _ => ()
+            }
+        }
     }
 
-    println!("\nSimulation ended.")
+    println!("\nSimulation ended. Average response time: {}", avg_response_time)
 
 }
 
-fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32, tx_stop_signal: Sender<()>, tx_end_confirmation: Sender<()>){
+fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32, tx_stop_signal: Sender<u64>, tx_end_confirmation: Sender<()>){
     let mut buffer = [0 as u8; 10];
     let mut group_data = HashMap::with_capacity(GROUP_SIZE);
 
@@ -75,17 +85,20 @@ fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32, tx_stop_s
 
     let mut it_id = starting_id;
     for mut stream in &stream_group{
-        buffer = data_to_bytes( &(it_id,(0,0,GROUP_SIZE as i16)) );
+        stream.set_nodelay(true).unwrap();
+        stream.set_read_timeout(Some(Duration::new(CONN_TIMEOUT, 0))).unwrap();
+        buffer = data_to_bytes( &(it_id,(SIMULATION_CYCLES as i16,0,GROUP_SIZE as i16)));
         while !stream.write(&buffer).is_ok() {};
+        group_data.insert(it_id, (0,0,0));
         it_id += 1;
     }
 
     //Simulation phase
-    for it in 0..SIMULATION_CYCLES {
+    for _ in 0..SIMULATION_CYCLES {
         
         //Receive coordinates
         for mut stream in &stream_group{
-            while !stream.read(&mut buffer).is_ok() {};
+            while !stream.read(&mut buffer).is_ok(){}
             let data_received = bytes_to_data(&buffer);
             group_data.insert(data_received.0, data_received.1);
         }
@@ -94,40 +107,25 @@ fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:i32, tx_stop_s
         for mut stream in &stream_group{
             for entry in &group_data{
                 buffer = data_to_bytes(&(*entry.0,*entry.1));
-                while !stream.write(& buffer).is_ok() {};
+                while !stream.write(& buffer).is_ok(){}
             }
-        }
-
-        if it != SIMULATION_CYCLES-1{
-            //Send continue simulation signal
-            for mut stream in &stream_group{
-            buffer = data_to_bytes(&(0,(0,0,0)));
-            while !stream.write(& buffer).is_ok() {};}
         }
     }
 
     //Wait for all threads before ending
     for _ in &stream_group{
-        while !tx_stop_signal.send(()).is_ok(){};
+        while !tx_stop_signal.send(0 as u64).is_ok(){};
     }
     while tx_end_confirmation.send(()).is_ok() {
         thread::sleep(Duration::from_secs(5));
     }
 
-    //Send end simulation signal
-    for mut stream in &stream_group{
-        buffer = data_to_bytes(&(-1,(0,0,0)));
-        while !stream.write(& buffer).is_ok() {};
-    }
-
     //Closing phase
     for mut stream in &stream_group{
         while !stream.read(&mut buffer).is_ok() {};
-        println!("Average millis ellapsed: {}", bytes_to_time(&buffer))
-    }
-
-    for _ in &stream_group{
-        while !tx_stop_signal.send(()).is_ok(){};
+        let response_time = bytes_to_time(&buffer);
+        //print!("\nAverage millis ellapsed: {}", response_time);
+        while !tx_stop_signal.send(response_time).is_ok(){};
     }
 
 }
