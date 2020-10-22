@@ -58,12 +58,12 @@ fn main() {
 
     drop(rx_end_confirmation);
 
-    let mut avg_response_time = 0;
+    let mut avg_response_time:Vec<u64> = vec![];
     for _ in 0..CLIENT_NUMBER{
         loop{
             match rx_stop_signal.recv() {
                 Ok(r) => {
-                    avg_response_time = (avg_response_time + r)/2;
+                    avg_response_time.push(r);
                     break;
                 },
                 _ => ()
@@ -71,7 +71,7 @@ fn main() {
         }
     }
 
-    println!("\nSimulation ended. Average response time: {}", avg_response_time)
+    println!("\nSimulation ended. Average response time: {}", average(&avg_response_time))
 
 }
 
@@ -165,87 +165,6 @@ fn data_to_bytes(value: &(i32,(i16,i16,i16))) -> [u8; 10]{
     buffer
 }
 
-/*
-fn main() {
-    let mut group_loop_it = GROUP_SIZE;
-    let mut group_counter = 0;
-    let mut stream_group: Vec<TcpStream> = Vec::new();
-
-    let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
-    let mut connection_count = 0;
-
-    for stream in listener.incoming() {
-        //Add the current connection of iteration to the group
-        group_loop_it-=1;
-        stream_group.push(stream.unwrap());
-
-        if group_loop_it == 0 {
-            //Create the thread with a completed connections group
-            thread::spawn(move || handle_group_connection(stream_group, group_counter));
-            stream_group = Vec::new();
-            group_loop_it = GROUP_SIZE;
-            group_counter +=  1;
-        }
-
-        //
-        connection_count+=1;
-        println!("Number of connections: {}", connection_count);
-    }
+fn average(values: &Vec<u64>) -> u64 {
+    values.iter().sum::<u64>() as u64 / values.len() as u64
 }
-
-fn handle_group_connection(stream_group: Vec<TcpStream> ,group_id:u32){
-    let mut buffer = [0 as u8; 10];
-    let mut group_data:[(i16,i16,i16,i32);GROUP_SIZE] = [(0, 0, 0, 0); GROUP_SIZE];
-
-    let mut init_it:usize = (GROUP_SIZE-1).into();
-
-    for mut stream in &stream_group{
-        stream.read(&mut buffer).unwrap();
-        let value = bytes_to_data(&buffer);
-        group_data[init_it] = value;
-        init_it -= 1;
-        stream.set_nonblocking(true).unwrap();
-    }
-    
-    loop{
-        for mut stream in &stream_group{
-            match stream.read(&mut buffer) {
-                Ok(buffersize) => {
-                    
-                    let value = bytes_to_data(&buffer);
-
-                    println!(
-                        "Group {}, msg from {} => x:{} y:{} z:{} ID:{}",
-                        group_id,
-                        stream.peer_addr().unwrap(),
-                        value.0,
-                        value.1,
-                        value.2,
-                        value.3
-                    );
-                    stream.flush().unwrap();
-
-                    
-                    for client in &group_data{
-                        if client.3 != value.3{
-                            buffer = data_to_bytes(&client);
-                            match stream.write(&buffer){
-                                Ok(buffersize) => {},
-                                Err(_error) => {}
-                            }
-                        }
-                    }
-                },
-                Err(_error) => {
-                    println!(
-                        "Group {}, msg from {} => NO MESSAGE",
-                        group_id,
-                        stream.peer_addr().unwrap()
-                    );
-                }
-            };
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-*/
